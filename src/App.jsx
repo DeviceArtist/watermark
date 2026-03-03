@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Upload, Download, X } from 'lucide-react';
 
 // Watermark configuration constants
-const WATERMARK_TEXT = 'Doubao AI';
+const DEFAULT_WATERMARK_TEXT = 'Doubao AI'; // Default watermark text
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
 const TARGET_WIDTH = 1024; // Target width for image scaling
 
@@ -16,6 +16,7 @@ export default () => {
   const [opacity, setOpacity] = useState(1); // Default to fully opaque
   const [originalImgData, setOriginalImgData] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [customWatermarkText, setCustomWatermarkText] = useState(DEFAULT_WATERMARK_TEXT); // New state for custom watermark text
 
   // DOM references
   const fileInputRef = useRef(null);
@@ -55,9 +56,9 @@ export default () => {
     return { width: newWidth, height: newHeight };
   }, []);
 
-  // Get opposite color
+  // Get opposite color based on luminance
   const getOppositeColor = (r, g, b) => {
-    // Calculate luminance to determine light or dark
+    // Calculate luminance to determine light or dark background
     const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 
     // If background is bright, use dark text; if dark, use light text
@@ -70,7 +71,7 @@ export default () => {
     }
   };
 
-  // Analyze image corner color
+  // Analyze image corner color to determine optimal watermark color
   const analyzeCornerColor = useCallback((img) => {
     if (!img) return { r: 0, g: 0, b: 0 };
 
@@ -135,7 +136,7 @@ export default () => {
     // Draw and scale original image to canvas
     ctx.drawImage(img, 0, 0, scaledWidth, scaledHeight);
 
-    // Convert hex to rgba
+    // Convert hex color to rgba
     const hexToRgb = (hex) => {
       const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
       return result
@@ -159,16 +160,19 @@ export default () => {
     // Calculate watermark position (bottom right corner with margin)
     const margin = 20;
 
+    // Use custom watermark text if provided, otherwise use default
+    const watermarkText = customWatermarkText.trim() || DEFAULT_WATERMARK_TEXT;
+
     // Draw watermark text
     ctx.fillText(
-      WATERMARK_TEXT,
+      watermarkText,
       canvas.width - margin,
       canvas.height - margin
     );
 
     // Generate processed image URL
     return canvas.toDataURL(fileType || 'image/png');
-  }, [calculateScaledDimensions, customColor, opacity]);
+  }, [calculateScaledDimensions, customColor, opacity, customWatermarkText]);
 
   // Load original image data
   const loadOriginalImage = useCallback((file) => {
@@ -308,7 +312,7 @@ export default () => {
     link.click();
   }, [processedImageUrl, originalImage]);
 
-  // Reset state
+  // Reset state to initial values
   const resetState = useCallback(() => {
     setOriginalImage(null);
     setProcessedImageUrl(null);
@@ -317,12 +321,13 @@ export default () => {
     setCustomColor('#000000');
     setOpacity(1); // Reset to fully opaque
     setShowSettings(false);
+    setCustomWatermarkText(DEFAULT_WATERMARK_TEXT); // Reset to default watermark text
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   }, []);
 
-  // Handle click on preview image
+  // Handle click on preview image to show settings
   const handlePreviewClick = useCallback((e) => {
     if (!originalImgData) return;
 
@@ -340,10 +345,18 @@ export default () => {
 
     // Calculate watermark position on actual image
     const margin = 20;
-    const textWidth = 24 * WATERMARK_TEXT.length * 0.6; // Approximate text width
+    
+    // Create temporary context to measure text width
+    const tempCanvas = document.createElement('canvas');
+    const tempCtx = tempCanvas.getContext('2d');
+    if (!tempCtx) return;
+    
+    tempCtx.font = 'bold 24px sans-serif';
+    const actualTextWidth = tempCtx.measureText(customWatermarkText || DEFAULT_WATERMARK_TEXT).width;
+    
     const textHeight = 24;
 
-    const watermarkX1 = originalImgData.width - margin - textWidth;
+    const watermarkX1 = originalImgData.width - margin - actualTextWidth;
     const watermarkX2 = originalImgData.width - margin;
     const watermarkY1 = originalImgData.height - margin - textHeight;
     const watermarkY2 = originalImgData.height - margin;
@@ -352,9 +365,9 @@ export default () => {
     if (clickX >= watermarkX1 && clickX <= watermarkX2 && clickY >= watermarkY1 && clickY <= watermarkY2) {
       setShowSettings(true);
     }
-  }, [originalImgData]);
+  }, [originalImgData, customWatermarkText]);
 
-  // Effect for real-time preview
+  // Effect for real-time preview when settings change
   useEffect(() => {
     if (!originalImgData || !originalImage) return;
 
@@ -363,7 +376,7 @@ export default () => {
     if (dataUrl) {
       setProcessedImageUrl(dataUrl);
     }
-  }, [originalImgData, originalImage, customColor, opacity, processImage]);
+  }, [originalImgData, originalImage, customColor, opacity, customWatermarkText, processImage]);
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
@@ -443,6 +456,19 @@ export default () => {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Watermark Text
+                      </label>
+                      <input
+                        type="text"
+                        value={customWatermarkText}
+                        onChange={(e) => setCustomWatermarkText(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        placeholder="Enter watermark text"
+                      />
+                    </div>
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Watermark Color
