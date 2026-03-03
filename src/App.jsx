@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Upload, Download, X } from 'lucide-react';
+import { Upload, Download, X, Filter } from 'lucide-react';
 
 // Watermark configuration constants
 const DEFAULT_WATERMARK_TEXT = 'Doubao AI'; // Default watermark text
@@ -17,6 +17,7 @@ export default () => {
   const [originalImgData, setOriginalImgData] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [customWatermarkText, setCustomWatermarkText] = useState(DEFAULT_WATERMARK_TEXT); // New state for custom watermark text
+  const [isDitherApplied, setIsDitherApplied] = useState(false); // Track if dither is applied
 
   // DOM references
   const fileInputRef = useRef(null);
@@ -114,8 +115,63 @@ export default () => {
     return { r: avgR, g: avgG, b: avgB };
   }, []);
 
+  // Apply Floyd-Steinberg dithering to image data
+  const applyDither = useCallback((imageData) => {
+    const data = imageData.data;
+    const width = imageData.width;
+    const height = imageData.height;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4;
+        
+        // Convert to grayscale using luminance formula
+        const gray = Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+        const oldPixel = gray;
+        const newPixel = oldPixel < 128 ? 0 : 255;
+        const error = oldPixel - newPixel;
+        
+        // Update current pixel to black or white
+        data[idx] = newPixel;
+        data[idx + 1] = newPixel;
+        data[idx + 2] = newPixel;
+        
+        // Propagate error to neighboring pixels
+        if (x + 1 < width) {
+          const rightIdx = (y * width + (x + 1)) * 4;
+          data[rightIdx] += error * 7 / 16;
+          data[rightIdx + 1] += error * 7 / 16;
+          data[rightIdx + 2] += error * 7 / 16;
+        }
+        
+        if (x - 1 >= 0 && y + 1 < height) {
+          const bottomLeftIdx = ((y + 1) * width + (x - 1)) * 4;
+          data[bottomLeftIdx] += error * 3 / 16;
+          data[bottomLeftIdx + 1] += error * 3 / 16;
+          data[bottomLeftIdx + 2] += error * 3 / 16;
+        }
+        
+        if (y + 1 < height) {
+          const bottomIdx = ((y + 1) * width + x) * 4;
+          data[bottomIdx] += error * 5 / 16;
+          data[bottomIdx + 1] += error * 5 / 16;
+          data[bottomIdx + 2] += error * 5 / 16;
+        }
+        
+        if (x + 1 < width && y + 1 < height) {
+          const bottomRightIdx = ((y + 1) * width + (x + 1)) * 4;
+          data[bottomRightIdx] += error * 1 / 16;
+          data[bottomRightIdx + 1] += error * 1 / 16;
+          data[bottomRightIdx + 2] += error * 1 / 16;
+        }
+      }
+    }
+    
+    return imageData;
+  }, []);
+
   // Process image and add watermark
-  const processImage = useCallback((img, fileType) => {
+  const processImage = useCallback((img, fileType, applyDitherEffect = false) => {
     if (!img) return null;
 
     // Calculate scaled dimensions
@@ -135,6 +191,13 @@ export default () => {
 
     // Draw and scale original image to canvas
     ctx.drawImage(img, 0, 0, scaledWidth, scaledHeight);
+
+    // Apply dither if requested
+    if (applyDitherEffect) {
+      const imageData = ctx.getImageData(0, 0, scaledWidth, scaledHeight);
+      const ditheredData = applyDither(imageData);
+      ctx.putImageData(ditheredData, 0, 0);
+    }
 
     // Convert hex color to rgba
     const hexToRgb = (hex) => {
@@ -172,7 +235,7 @@ export default () => {
 
     // Generate processed image URL
     return canvas.toDataURL(fileType || 'image/png');
-  }, [calculateScaledDimensions, customColor, opacity, customWatermarkText]);
+  }, [calculateScaledDimensions, customColor, opacity, customWatermarkText, applyDither]);
 
   // Load original image data
   const loadOriginalImage = useCallback((file) => {
@@ -201,6 +264,7 @@ export default () => {
     setOriginalImage(file);
     setErrorMessage(null);
     setShowSettings(false); // Hide settings when uploading new image
+    setIsDitherApplied(false); // Reset dither state
 
     try {
       const img = await loadOriginalImage(file);
@@ -216,7 +280,7 @@ export default () => {
       setOpacity(1); // Set to fully opaque
 
       // Initial processing with current settings
-      const dataUrl = processImage(img, file.type);
+      const dataUrl = processImage(img, file.type, isDitherApplied);
       if (dataUrl) {
         setProcessedImageUrl(dataUrl);
       }
@@ -225,7 +289,7 @@ export default () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [validateFile, loadOriginalImage, processImage, analyzeCornerColor]);
+  }, [validateFile, loadOriginalImage, processImage, analyzeCornerColor, isDitherApplied]);
 
   // Handle drag and drop upload
   const handleDrop = useCallback(async (e) => {
@@ -239,6 +303,7 @@ export default () => {
     setOriginalImage(file);
     setErrorMessage(null);
     setShowSettings(false); // Hide settings when uploading new image
+    setIsDitherApplied(false); // Reset dither state
 
     try {
       const img = await loadOriginalImage(file);
@@ -254,7 +319,7 @@ export default () => {
       setOpacity(1); // Set to fully opaque
 
       // Initial processing with current settings
-      const dataUrl = processImage(img, file.type);
+      const dataUrl = processImage(img, file.type, isDitherApplied);
       if (dataUrl) {
         setProcessedImageUrl(dataUrl);
       }
@@ -268,7 +333,27 @@ export default () => {
         dropZoneRef.current.classList.remove('drop-zone--active');
       }
     }
-  }, [validateFile, loadOriginalImage, processImage, analyzeCornerColor]);
+  }, [validateFile, loadOriginalImage, processImage, analyzeCornerColor, isDitherApplied]);
+
+  // Handle dither toggle
+  const handleDitherToggle = useCallback(async () => {
+    if (!originalImgData || !originalImage) return;
+
+    setIsProcessing(true);
+    setIsDitherApplied(prev => !prev);
+
+    try {
+      // Process image with new dither state
+      const dataUrl = processImage(originalImgData, originalImage.type, !isDitherApplied);
+      if (dataUrl) {
+        setProcessedImageUrl(dataUrl);
+      }
+    } catch (err) {
+      setErrorMessage('Failed to apply dither effect. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [originalImgData, originalImage, processImage, isDitherApplied]);
 
   // Handle drag over
   const handleDragOver = useCallback((e) => {
@@ -307,10 +392,11 @@ export default () => {
     // Generate download file name
     const originalName = originalImage.name.split('.')[0];
     const extension = originalImage.name.split('.').pop();
-    link.download = `${originalName}_watermarked.${extension}`;
+    const suffix = isDitherApplied ? '_dithered_watermarked' : '_watermarked';
+    link.download = `${originalName}${suffix}.${extension}`;
 
     link.click();
-  }, [processedImageUrl, originalImage]);
+  }, [processedImageUrl, originalImage, isDitherApplied]);
 
   // Reset state to initial values
   const resetState = useCallback(() => {
@@ -322,6 +408,7 @@ export default () => {
     setOpacity(1); // Reset to fully opaque
     setShowSettings(false);
     setCustomWatermarkText(DEFAULT_WATERMARK_TEXT); // Reset to default watermark text
+    setIsDitherApplied(false); // Reset dither state
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -372,11 +459,11 @@ export default () => {
     if (!originalImgData || !originalImage) return;
 
     // Process image with current settings
-    const dataUrl = processImage(originalImgData, originalImage.type);
+    const dataUrl = processImage(originalImgData, originalImage.type, isDitherApplied);
     if (dataUrl) {
       setProcessedImageUrl(dataUrl);
     }
-  }, [originalImgData, originalImage, customColor, opacity, customWatermarkText, processImage]);
+  }, [originalImgData, originalImage, customColor, opacity, customWatermarkText, processImage, isDitherApplied]);
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
@@ -524,6 +611,19 @@ export default () => {
               >
                 <X className="mr-2 h-4 w-4" />
                 Upload New Image
+              </button>
+
+              <button
+                onClick={handleDitherToggle}
+                disabled={isProcessing}
+                className={`flex-1 p-3 rounded-md flex items-center justify-center ${
+                  isDitherApplied 
+                    ? 'bg-purple-600 hover:bg-purple-700 text-white' 
+                    : 'bg-purple-200 hover:bg-purple-300 text-purple-800'
+                }`}
+              >
+                <Filter className="mr-2 h-4 w-4" />
+                {isDitherApplied ? 'Remove Dither' : 'Apply Dither'}
               </button>
             </div>
           </div>
